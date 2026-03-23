@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+    <title>Lista de Tareas</title>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="flex-container"></div>
+   
+     <nav class="barra-tareas">
+        <div class="barra-tareas-estadisticas">
+          <h2 class="sidebar-estadisticas">Estadisticas</h2>
+          <div id="recuento-texto" class="estadisticas"></div>
+        </div>
+    </nav>
+    <div class="contenedor">
+      <div class="header-top">
+        <h1 class="titulo-app">Lista de Tareas</h1>
+        <button id="toggle-tema" class="boton-tema" type="button">Modo Oscuro</button>
+      </div>
+
+      <div class="buscador">
+        <label for="buscar" class="sr-only">Buscar tarea</label>
+        <input type="text" id="buscar" placeholder="Buscar tarea..." aria-label="Buscar tareas" />
+      </div>
+
+      <div class="ordenacion">
+        <label for="ordenar" class="sr-only">Ordenar tareas</label>
+        <select id="ordenar" aria-label="Ordenar tareas">
+          <option value="mas-nuevas">Más nuevas</option>
+          <option value="az">A-Z</option>
+          <option value="za">Z-A</option>
+        </select>
+      </div>
+
+      <form id="form-crear" class="formulario">
+        <input type="text" id="crear" placeholder="Escribe una tarea..." />
+        <button type="submit" class="boton-crear">
+          <i class="fa-solid fa-plus"></i>
+        </button>
+      </form>
+
+      <div class="contenedor-2">
+        <button class="baja" id="filtro-completadas">Completadas</button>
+        <button class="media" id="filtro-todas">Todas</button>
+        <button class="alta" id="filtro-pendientes">Pendientes</button>
+      </div>
+
+      <ul id="lista-tareas" class="list-group"></ul>
+
+      
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
