@@ -374,6 +374,15 @@ window.addEventListener("load", () => {
     document.querySelector(".alta").addEventListener("click", () => filtrar("pendiente"));
     document.querySelector(".media").addEventListener("click", () => filtrar("todos"));
 
+    if (btnToggleTema) {
+      btnToggleTema.addEventListener("click", () => {
+        const temaActual = document.body.classList.contains("dark") ? "dark" : "light";
+        const nuevoTema = temaActual === "dark" ? "light" : "dark";
+        aplicarTema(nuevoTema);
+        guardarTema(nuevoTema);
+      });
+    }
+
     if (selectOrden) {
       selectOrden.addEventListener("change", () => ordenarTareas(selectOrden.value));
       ordenarTareas(selectOrden.value);
