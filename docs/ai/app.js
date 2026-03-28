@@ -1,7 +1,20 @@
+let apiClientRef = null;
+
+try {
+  if (typeof require === "function") {
+    apiClientRef = require("./api/client");
+  }
+} catch (error) {
+  // Si require existe pero falla en navegador, usamos window.apiClient.
+}
+
+if (!apiClientRef && typeof window !== "undefined") {
+  apiClientRef = window.apiClient;
+}
+
 window.addEventListener("load", () => {
   const MAX_LONGITUD_TAREA = 120;
-  const STORAGE_KEY = "misTareas";
-  const THEME_KEY = "taskflow-theme";
+  const PRIORIDAD_DEFAULT = 2;
 
   const formCrearTarea = document.getElementById("form-crear");
   const listaDeTareas = document.getElementById("lista-tareas");
@@ -9,6 +22,11 @@ window.addEventListener("load", () => {
   const inputBuscarTarea = document.getElementById("buscar");
   const selectOrden = document.getElementById("ordenar");
   const btnToggleTema = document.getElementById("toggle-tema");
+  let solicitudesActivas = 0;
+  let estadoUi = null;
+  let estadoMensaje = null;
+  let estadoReintentar = null;
+  let accionReintento = null;
 
   /**
    * Aplica el tema (claro u oscuro) al documento.
@@ -23,22 +41,99 @@ window.addEventListener("load", () => {
   };
 
   /**
-   * Carga el tema guardado en localStorage y lo aplica.
-   * Si no hay tema guardado, se aplica el tema claro por defecto.
+   * Crea el contenedor visual de estados de la app.
    */
-  const cargarTemaDesdeStorage = () => {
-    const temaGuardado = localStorage.getItem(THEME_KEY);
-    const temaInicial = temaGuardado === "dark" ? "dark" : "light";
-    aplicarTema(temaInicial);
+  const inicializarEstadoUi = () => {
+    if (!formCrearTarea) return;
+
+    estadoUi = document.createElement("div");
+    estadoUi.id = "estado-ui";
+    estadoUi.className = "estado-ui oculto";
+
+    estadoMensaje = document.createElement("span");
+    estadoMensaje.id = "estado-mensaje";
+
+    estadoReintentar = document.createElement("button");
+    estadoReintentar.id = "estado-reintentar";
+    estadoReintentar.type = "button";
+    estadoReintentar.textContent = "Reintentar";
+    estadoReintentar.className = "estado-reintentar oculto";
+
+    estadoReintentar.addEventListener("click", async () => {
+      if (typeof accionReintento !== "function") return;
+      await accionReintento();
+    });
+
+    estadoUi.appendChild(estadoMensaje);
+    estadoUi.appendChild(estadoReintentar);
+    formCrearTarea.insertAdjacentElement("afterend", estadoUi);
   };
 
-  /**
-   * Guarda la preferencia de tema en localStorage.
-   *
-   * @param {'light'|'dark'} tema Tema a guardar.
-   */
-  const guardarTema = (tema) => {
-    localStorage.setItem(THEME_KEY, tema);
+  const ocultarEstado = () => {
+    if (!estadoUi) return;
+    estadoUi.className = "estado-ui oculto";
+    estadoMensaje.textContent = "";
+    estadoReintentar.className = "estado-reintentar oculto";
+    accionReintento = null;
+  };
+
+  const mostrarEstado = (tipo, mensaje, permitirReintento = false, onRetry = null) => {
+    if (!estadoUi) return;
+    estadoUi.className = `estado-ui ${tipo}`;
+    estadoMensaje.textContent = mensaje;
+
+    if (permitirReintento && typeof onRetry === "function") {
+      accionReintento = onRetry;
+      estadoReintentar.className = "estado-reintentar";
+    } else {
+      accionReintento = null;
+      estadoReintentar.className = "estado-reintentar oculto";
+    }
+  };
+
+  const habilitarInteracciones = (habilitado) => {
+    const botonesBloqueables = document.querySelectorAll(
+      ".boton-crear, #filtro-completadas, #filtro-todas, #filtro-pendientes"
+    );
+    botonesBloqueables.forEach((boton) => {
+      boton.disabled = !habilitado;
+    });
+
+    if (inputNuevaTarea) inputNuevaTarea.disabled = !habilitado;
+    if (inputBuscarTarea) inputBuscarTarea.disabled = !habilitado;
+    if (selectOrden) selectOrden.disabled = !habilitado;
+
+    if (listaDeTareas) {
+      listaDeTareas.style.pointerEvents = habilitado ? "auto" : "none";
+      listaDeTareas.style.opacity = habilitado ? "1" : "0.7";
+    }
+  };
+
+  const mostrarCargando = (activo, mensaje = "Cargando...") => {
+    if (activo) {
+      solicitudesActivas += 1;
+      mostrarEstado("cargando", mensaje);
+      habilitarInteracciones(false);
+      return;
+    }
+
+    solicitudesActivas = Math.max(0, solicitudesActivas - 1);
+    if (solicitudesActivas === 0) {
+      habilitarInteracciones(true);
+    }
+  };
+
+  const mostrarExito = (mensaje) => {
+    mostrarEstado("exito", mensaje);
+    setTimeout(() => {
+      if (estadoUi && estadoUi.classList.contains("exito")) {
+        ocultarEstado();
+      }
+    }, 1800);
+  };
+
+  const mostrarError = (mensaje, onRetry = null) => {
+    mostrarEstado("error", mensaje, Boolean(onRetry), onRetry);
   };
 
   /**
@@ -75,59 +170,24 @@ window.addEventListener("load", () => {
   };
 
   /**
-   * Serializa las tareas de la UI y las guarda en localStorage.
-   * Usa STORAGE_KEY para mantener el nombre consistente.
-   */
-  const guardarEnStorage = () => {
-    const tareasParaStorage = Array.from(listaDeTareas.querySelectorAll("li")).map(
-      (tareaElemento) => ({
-        textoTarea: tareaElemento.querySelector("strong").textContent,
-        completada: tareaElemento
-          .querySelector(".btn-tick")
-          .classList.contains("completada"),
-      })
-    );
-
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tareasParaStorage));
-  };
-
-  /**
-   * Carga las tareas guardadas en localStorage y las renderiza en la UI.
-   * Ignora el contenido si no existe o no es JSON válido.
-   */
-  const cargarTareasDesdeStorage = () => {
-    const datosGuardados = localStorage.getItem(STORAGE_KEY);
-    if (!datosGuardados) return;
-
-    try {
-      const tareasGuardadas = JSON.parse(datosGuardados);
-      tareasGuardadas.forEach((tarea) => {
-        mostrarTareaEnHtml(tarea.textoTarea, tarea.completada, false);
-      });
-    } catch (error) {
-      console.warn("No se pudo leer tareas de localStorage:", error);
-    }
-  };
-
-  /**
    * Crea la estructura DOM de una tarea.
    *
-   * @param {string} texto Texto de la tarea.
-   * @param {boolean} completada Indica si ya está completada.
+   * @param {{id:number|string,titulo:string,completada:boolean}} tarea Datos de la tarea.
    * @returns {HTMLLIElement} Elemento <li> ya listo para insertarse en la lista.
    */
-  const crearElementoTarea = (texto, completada) => {
+  const crearElementoTarea = (tarea) => {
     const li = document.createElement("li");
+    li.dataset.id = String(tarea.id);
 
     const strong = document.createElement("strong");
-    strong.className = completada ? "completada-texto" : "";
-    strong.textContent = texto;
+    strong.className = tarea.completada ? "completada-texto" : "";
+    strong.textContent = tarea.titulo;
 
     const acciones = document.createElement("div");
     acciones.className = "acciones";
 
     const tick = document.createElement("i");
-    tick.className = `fa-solid fa-check btn-tick ${completada ? "completada" : ""}`;
+    tick.className = `fa-solid fa-check btn-tick ${tarea.completada ? "completada" : ""}`;
 
     const trash = document.createElement("i");
     trash.className = "fa-solid fa-trash-can borrar";
@@ -138,16 +198,6 @@ window.addEventListener("load", () => {
     li.appendChild(strong);
     li.appendChild(acciones);
     return li;
-  };
-
-  /**
-   * Guarda en localStorage y actualiza el contador de tareas.
-   *
-   * Esta función se llama cuando cambian las tareas (añadir/borrar/completar).
-   */
-  const guardarYActualizar = () => {
-    guardarEnStorage();
-    actualizarRecuentoTareas();
   };
 
   /**
@@ -162,12 +212,10 @@ window.addEventListener("load", () => {
   /**
    * Agrega una tarea al DOM y actualiza el estado de la app.
    *
-   * @param {string} texto Texto de la tarea.
-   * @param {boolean} [completada=false] Indica si la tarea debe mostrarse como completada.
-   * @param {boolean} [guardar=true] Si se debe persistir en localStorage.
+   * @param {{id:number|string,titulo:string,completada:boolean}} tarea Tarea a renderizar.
    */
-  const mostrarTareaEnHtml = (texto, completada = false, guardar = true) => {
-    const tareaElemento = crearElementoTarea(texto, completada);
+  const mostrarTareaEnHtml = (tarea) => {
+    const tareaElemento = crearElementoTarea(tarea);
 
     // Si el criterio es "Más nuevas", añadimos las tareas al inicio.
     if (selectOrden?.value === "mas-nuevas") {
@@ -176,11 +224,33 @@ window.addEventListener("load", () => {
       listaDeTareas.appendChild(tareaElemento);
     }
 
-    if (guardar) guardarYActualizar();
+    actualizarRecuentoTareas();
 
     // Ordena cuando la opción seleccionada no depende del orden de inserción.
     if (selectOrden && selectOrden.value !== "mas-nuevas") {
       ordenarTareas(selectOrden.value);
+    }
+  };
+
+  /**
+   * Pide las tareas al backend y las renderiza.
+   */
+  const cargarTareasDesdeApi = async () => {
+    const tareas = await apiClientRef.obtenerTodas();
+    listaDeTareas.innerHTML = "";
+    tareas.forEach((tarea) => mostrarTareaEnHtml(tarea));
+  };
+
+  const cargarTareasConEstado = async () => {
+    mostrarCargando(true, "Cargando tareas...");
+    try {
+      await cargarTareasDesdeApi();
+      actualizarRecuentoTareas();
+      mostrarExito("Tareas cargadas correctamente.");
+    } catch (error) {
+      mostrarError(`No se pudieron cargar las tareas: ${error.message}`, cargarTareasConEstado);
+    } finally {
+      mostrarCargando(false);
     }
   };
 
@@ -191,20 +261,29 @@ window.addEventListener("load", () => {
    * - Evita duplicados.
    * - Muestra mensajes de alerta si hay errores.
    */
-  const capturarValorTarea = () => {
+  const capturarValorTarea = async () => {
     const { valido, texto, mensaje } = validarTextoTarea(inputNuevaTarea.value);
     if (!valido) {
-      alert(mensaje);
+      mostrarError(mensaje);
       return;
     }
 
     if (esTareaDuplicada(texto)) {
-      alert("Esa tarea ya existe.");
+      mostrarError("Esa tarea ya existe.");
       return;
     }
 
-    mostrarTareaEnHtml(texto);
-    inputNuevaTarea.value = "";
+    mostrarCargando(true, "Creando tarea...");
+    try {
+      const nuevaTarea = await apiClientRef.crearTarea(texto, PRIORIDAD_DEFAULT);
+      mostrarTareaEnHtml(nuevaTarea);
+      inputNuevaTarea.value = "";
+      mostrarExito("Tarea creada correctamente.");
+    } catch (error) {
+      mostrarError(`No se pudo crear la tarea: ${error.message}`);
+    } finally {
+      mostrarCargando(false);
+    }
   };
 
   /**
@@ -300,9 +379,14 @@ window.addEventListener("load", () => {
    * - Botones de filtrado.
    */
   const inicializarEventos = () => {
-    formCrearTarea.addEventListener("submit", (e) => {
+    if (!formCrearTarea || !listaDeTareas || !inputBuscarTarea) {
+      mostrarError("No se pudieron inicializar eventos de la UI.");
+      return;
+    }
+
+    formCrearTarea.addEventListener("submit", async (e) => {
       e.preventDefault();
-      capturarValorTarea();
+      await capturarValorTarea();
     });
 
     // Filtra tareas en tiempo real al escribir en el buscador.
@@ -314,23 +398,51 @@ window.addEventListener("load", () => {
       });
     });
 
-    listaDeTareas.addEventListener("click", (e) => {
+    listaDeTareas.addEventListener("click", async (e) => {
       const li = e.target.closest("li");
       if (!li) return;
 
+      const id = Number(li.dataset.id);
+      if (!id) return;
+
       if (e.target.classList.contains("borrar")) {
-        li.style.opacity = "0";
-        li.style.transform = "scale(0.9)";
-        setTimeout(() => {
-          li.remove();
-          guardarYActualizar();
-        }, 300);
+        mostrarCargando(true, "Eliminando tarea...");
+        try {
+          await apiClientRef.eliminarTarea(id);
+          li.style.opacity = "0";
+          li.style.transform = "scale(0.9)";
+          setTimeout(() => {
+            li.remove();
+            actualizarRecuentoTareas();
+          }, 300);
+          mostrarExito("Tarea eliminada.");
+        } catch (error) {
+          mostrarError(`No se pudo eliminar la tarea: ${error.message}`);
+        } finally {
+          mostrarCargando(false);
+        }
       }
 
       if (e.target.classList.contains("btn-tick")) {
-        e.target.classList.toggle("completada");
-        li.querySelector("strong").classList.toggle("completada-texto");
-        guardarYActualizar();
+        const estadoActual = e.target.classList.contains("completada");
+        const nuevoEstado = !estadoActual;
+
+        mostrarCargando(true, "Actualizando tarea...");
+        try {
+          const tareaActualizada = await apiClientRef.actualizarTarea(id, {
+            completada: nuevoEstado,
+          });
+          e.target.classList.toggle("completada", tareaActualizada.completada);
+          li
+            .querySelector("strong")
+            .classList.toggle("completada-texto", tareaActualizada.completada);
+          actualizarRecuentoTareas();
+          mostrarExito("Tarea actualizada.");
+        } catch (error) {
+          mostrarError(`No se pudo actualizar la tarea: ${error.message}`);
+        } finally {
+          mostrarCargando(false);
+        }
       }
     });
 
@@ -347,39 +459,63 @@ window.addEventListener("load", () => {
       elementoTarea.replaceChild(inputEdicionTarea, e.target);
       inputEdicionTarea.focus();
 
-      const finalizar = () => {
+      const finalizar = async () => {
         const { valido, texto, mensaje } = validarTextoTarea(inputEdicionTarea.value);
         if (!valido) {
-          alert(mensaje);
+          mostrarError(mensaje);
           inputEdicionTarea.focus();
           return;
         }
 
-        const strong = document.createElement("strong");
-        strong.textContent = texto;
-        if (elementoTarea.querySelector(".completada"))
-          strong.classList.add("completada-texto");
+        mostrarCargando(true, "Guardando cambios...");
+        try {
+          const id = Number(elementoTarea.dataset.id);
+          const tareaActualizada = await apiClientRef.actualizarTarea(id, { titulo: texto });
 
-        elementoTarea.replaceChild(strong, inputEdicionTarea);
-        guardarYActualizar();
+          const strong = document.createElement("strong");
+          strong.textContent = tareaActualizada.titulo;
+          if (elementoTarea.querySelector(".completada")) {
+            strong.classList.add("completada-texto");
+          }
+
+          elementoTarea.replaceChild(strong, inputEdicionTarea);
+          actualizarRecuentoTareas();
+          mostrarExito("Cambios guardados.");
+        } catch (error) {
+          mostrarError(`No se pudo editar la tarea: ${error.message}`);
+          inputEdicionTarea.focus();
+        } finally {
+          mostrarCargando(false);
+        }
       };
 
-      inputEdicionTarea.addEventListener("blur", finalizar);
-      inputEdicionTarea.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter") finalizar();
+      inputEdicionTarea.addEventListener("blur", () => {
+        finalizar();
+      });
+      inputEdicionTarea.addEventListener("keydown", async (ev) => {
+        if (ev.key === "Enter") await finalizar();
       });
     });
 
-    document.querySelector(".baja").addEventListener("click", () => filtrar("finalizado"));
-    document.querySelector(".alta").addEventListener("click", () => filtrar("pendiente"));
-    document.querySelector(".media").addEventListener("click", () => filtrar("todos"));
+    const btnCompletadas = document.querySelector(".baja");
+    const btnPendientes = document.querySelector(".alta");
+    const btnTodas = document.querySelector(".media");
+
+    if (btnCompletadas) {
+      btnCompletadas.addEventListener("click", () => filtrar("finalizado"));
+    }
+    if (btnPendientes) {
+      btnPendientes.addEventListener("click", () => filtrar("pendiente"));
+    }
+    if (btnTodas) {
+      btnTodas.addEventListener("click", () => filtrar("todos"));
+    }
 
     if (btnToggleTema) {
       btnToggleTema.addEventListener("click", () => {
         const temaActual = document.body.classList.contains("dark") ? "dark" : "light";
         const nuevoTema = temaActual === "dark" ? "light" : "dark";
         aplicarTema(nuevoTema);
-        guardarTema(nuevoTema);
       });
     }
 
@@ -389,7 +525,23 @@ window.addEventListener("load", () => {
     }
   };
 
-  cargarTareasDesdeStorage();
-  actualizarRecuentoTareas();
-  inicializarEventos();
+  const inicializarApp = async () => {
+    try {
+      inicializarEstadoUi();
+      aplicarTema("light");
+      inicializarEventos();
+
+      if (!apiClientRef) {
+        mostrarError("No se encontro el cliente HTTP. Revisa la carga de scripts.");
+        return;
+      }
+
+      await cargarTareasConEstado();
+    } catch (error) {
+      console.error("[TaskFlow UI Error]", error);
+      mostrarError(`Error inicializando la app: ${error.message}`);
+    }
+  };
+
+  inicializarApp();
 });
